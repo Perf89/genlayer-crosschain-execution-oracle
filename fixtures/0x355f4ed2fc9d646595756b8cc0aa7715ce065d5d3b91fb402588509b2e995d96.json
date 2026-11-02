@@ -1,0 +1,15 @@
+{
+  "_note": "Synthetic test document modeled on an explorer API response. Not a real transaction.",
+  "hash": "0x355f4ed2fc9d646595756b8cc0aa7715ce065d5d3b91fb402588509b2e995d96",
+  "status": "error",
+  "result": "execution reverted",
+  "block_number": 21000104,
+  "from": {
+    "hash": "0x2222222222222222222222222222222222222222"
+  },
+  "to": {
+    "hash": "0x1111111111111111111111111111111111111111"
+  },
+  "value": "0",
+  "token_transfers": []
+}
