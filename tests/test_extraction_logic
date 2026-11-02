@@ -1,0 +1,235 @@
+"""
+Offline tests for the pure logic in crosschain_execution_oracle.py.
+
+Plain Python, no GenLayer runtime needed: the helper functions are loaded
+straight from the contract source, so these tests always exercise the exact
+code that gets deployed.
+
+    python3 tests/test_extraction_logic.py
+"""
+import itertools
+import json
+import pathlib
+import typing
+
+SRC = (pathlib.Path(__file__).parent.parent / "crosschain_execution_oracle.py").read_text()
+start = SRC.index('ERROR_EXPECTED = "[EXPECTED]"')
+end = SRC.index("@allow_storage")
+ns = {"json": json, "typing": typing}
+exec(SRC[start:end], ns)
+validate = ns["_validate_extraction"]
+parse = ns["_parse_llm_json"]
+decide = ns["_decide"]
+agree = ns["_extractions_agree"]
+norm_id = ns["_norm_id"]
+norm_hash = ns["_norm_hash"]
+clean_amount = ns["_clean_amount"]
+
+TX = "0xabc123"
+RECIPIENT = "0x5B38Da6a701c568545dCfcB03FcB875f56beddC4"
+TOKEN = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+LOOKALIKE = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB49"
+MIN = 250_000_000
+
+
+def t(recipient=RECIPIENT, token=TOKEN, amount="250000000"):
+    return {"recipient": recipient, "token": token, "amount_raw": amount}
+
+
+def ex(transfers=None, succeeded=True, tx_hash=TX, reasoning="ok"):
+    return {"tx_hash": tx_hash, "succeeded": succeeded,
+            "transfers": [t()] if transfers is None else transfers, "reasoning": reasoning}
+
+
+def rejects(case):
+    try:
+        validate(case)
+    except ValueError:
+        return True
+    return False
+
+
+def verdict(e):
+    return decide(e, TX, RECIPIENT, TOKEN, MIN)
+
+
+# --- strict validation of the extracted facts -------------------------------
+
+def test_accepts_well_formed():
+    out = validate(ex())
+    assert out["succeeded"] is True and out["transfers"] == [t()]
+    assert validate(ex(transfers=[]))["transfers"] == []
+
+
+def test_succeeded_must_be_a_real_boolean():
+    for bad in ("true", "false", "ok", 0, 1, None):
+        assert rejects(ex(succeeded=bad)), bad
+
+
+def test_amounts_are_digits_only_and_canonical():
+    assert validate(ex(transfers=[t(amount=250000000)]))["transfers"][0]["amount_raw"] == "250000000"
+    assert validate(ex(transfers=[t(amount="0000250")]))["transfers"][0]["amount_raw"] == "250"
+    for bad in ("1.5", "-1", "1e6", "0x10", "", " ", "12 000", None, 1.5, True, False, -1, [1]):
+        assert rejects(ex(transfers=[t(amount=bad)])), bad
+    assert rejects(ex(transfers=[t(amount="9" * 78)]))
+    assert validate(ex(transfers=[t(amount="9" * 77)]))
+
+
+def test_transfer_fields_and_list_shape():
+    for bad in (None, "", "  ", 5, ["a"]):
+        assert rejects(ex(transfers=[t(recipient=bad)])), bad
+        assert rejects(ex(transfers=[t(token=bad)])), bad
+    assert rejects(ex(transfers="not a list"))
+    assert rejects(ex(transfers=[ "not an object" ]))
+    assert rejects(ex(transfers=[t()] * 21))
+    assert validate(ex(transfers=[t()] * 20))
+
+
+def test_missing_fields_and_wrong_container():
+    for field in ("tx_hash", "succeeded", "transfers", "reasoning"):
+        case = ex()
+        del case[field]
+        assert rejects(case), field
+    assert rejects([True])
+    assert rejects("not a dict")
+    assert len(validate(ex(reasoning="x" * 900))["reasoning"]) == 500
+
+
+def test_parse_accepts_text_fenced_text_and_objects():
+    assert parse('{"a": 1}') == {"a": 1}
+    assert parse('```json\n{"a": 1}\n```') == {"a": 1}
+    assert parse({"a": 1}) == {"a": 1}
+    for bad in (None, 5, 1.5, True, "not json"):
+        try:
+            parse(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted {bad!r}")
+
+
+# --- identifier normalization ------------------------------------------------
+
+def test_evm_identifiers_are_case_insensitive_others_are_exact():
+    assert norm_id(RECIPIENT) == norm_id(RECIPIENT.lower()) == norm_id(RECIPIENT.upper().replace("0X", "0x"))
+    assert norm_id("  NATIVE ") == "native"
+    # base58 / denoms are case-sensitive: different case means a different value
+    assert norm_id("9xQeWvG816bUx9EPjHmaT23yvVM2ZWbrrpZb9PusVFin") != norm_id("9xqewvg816bux9epjhmat23yvvm2zwbrrpzb9pusvfin")
+    assert norm_id("uatom") != norm_id("UATOM")
+    assert norm_hash("0xABC") == norm_hash("abc") == "abc"
+
+
+# --- the decision, in its fixed order ---------------------------------------
+
+def test_ok_when_everything_matches():
+    assert verdict(ex()) == "ok"
+    assert verdict(ex(transfers=[t(amount="999999999")])) == "ok"
+    # EVM casing does not matter
+    assert verdict(ex(transfers=[t(recipient=RECIPIENT.lower(), token=TOKEN.lower())])) == "ok"
+
+
+def test_amounts_to_the_same_recipient_and_token_add_up():
+    assert verdict(ex(transfers=[t(amount="100000000"), t(amount="150000000")])) == "ok"
+    assert verdict(ex(transfers=[t(amount="100000000"), t(amount="149999999")])) == "amount_too_low"
+
+
+def test_each_failure_has_its_own_reason_in_order():
+    assert verdict(ex(tx_hash="0xdifferent")) == "evidence_mismatch"
+    assert verdict(ex(succeeded=False)) == "tx_failed"
+    assert verdict(ex(transfers=[])) == "wrong_recipient"
+    assert verdict(ex(transfers=[t(recipient="0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB")])) == "wrong_recipient"
+    assert verdict(ex(transfers=[t(token=LOOKALIKE)])) == "wrong_token"
+    assert verdict(ex(transfers=[t(token="native")])) == "wrong_token"
+    assert verdict(ex(transfers=[t(amount="249999999")])) == "amount_too_low"
+    # order: a wrong hash is reported before a failed tx, a failed tx before the rest
+    assert verdict(ex(tx_hash="0xother", succeeded=False)) == "evidence_mismatch"
+    assert verdict(ex(succeeded=False, transfers=[t(token=LOOKALIKE)])) == "tx_failed"
+
+
+def test_lookalike_token_with_the_same_symbol_is_not_the_real_token():
+    # the classic trap: same symbol, one character different in the address
+    assert verdict(ex(transfers=[t(token=LOOKALIKE)])) == "wrong_token"
+    assert TOKEN.lower() != LOOKALIKE.lower()
+
+
+# --- equivalence between two validators' extractions ------------------------
+
+def test_agree_when_both_lead_to_the_same_decision():
+    a = ex(transfers=[t()])
+    b = ex(transfers=[t(), t(recipient="0x1111111111111111111111111111111111111111", token="native", amount="5")])
+    assert agree(a, b, TX, RECIPIENT, TOKEN, MIN)   # an irrelevant extra fee transfer does not matter
+    assert agree(ex(reasoning="a"), ex(reasoning="completely different"), TX, RECIPIENT, TOKEN, MIN)
+
+
+def test_disagree_when_the_decision_differs():
+    good = ex()
+    for bad in (ex(succeeded=False), ex(transfers=[]), ex(transfers=[t(token=LOOKALIKE)]),
+                ex(transfers=[t(amount="1")]), ex(tx_hash="0xother")):
+        assert not agree(good, bad, TX, RECIPIENT, TOKEN, MIN)
+        assert not agree(bad, good, TX, RECIPIENT, TOKEN, MIN)
+
+
+def test_invariant_agreement_implies_same_outcome():
+    # Exhaustive over a small domain: every pair of extractions, in both orders.
+    recipients = (RECIPIENT, "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB")
+    tokens = (TOKEN, LOOKALIKE)
+    amounts = ("0", "249999999", "250000000")
+    kinds = [t(r, k, a) for r, k, a in itertools.product(recipients, tokens, amounts)]
+    lists = [[]] + [[x] for x in kinds] + [[x, y] for x in kinds for y in kinds]
+    exs = [ex(transfers=l, succeeded=s, tx_hash=h) for l in lists for s in (True, False) for h in (TX, "0xother")]
+    decisions = [verdict(e) for e in exs]
+    assert len(exs) == 628  # 157 transfer lists x 2 success flags x 2 tx hashes
+    by_decision = {}
+    for e, d in zip(exs, decisions):
+        by_decision.setdefault(d, []).append(e)
+    # agreement is exactly "same decision": equal decisions agree, different ones do not
+    for d1, d2 in itertools.product(by_decision, repeat=2):
+        a, b = by_decision[d1][0], by_decision[d2][0]
+        assert agree(a, b, TX, RECIPIENT, TOKEN, MIN) == (d1 == d2)
+    # and every member of a decision class agrees with its representative
+    for d, members in by_decision.items():
+        rep = members[0]
+        assert all(agree(rep, m, TX, RECIPIENT, TOKEN, MIN) for m in members)
+
+
+def test_soundness_ok_always_rests_on_a_real_matching_transfer():
+    recipients = (RECIPIENT, "0x4B0897b0513fdC7C541B6d9D7E929C4e5364D2dB")
+    tokens = (TOKEN, LOOKALIKE, "native")
+    amounts = ("0", "100000000", "250000000")
+    kinds = [t(r, k, a) for r, k, a in itertools.product(recipients, tokens, amounts)]
+    lists = [[]] + [[x] for x in kinds] + [[x, y] for x in kinds for y in kinds]
+    checked = oks = 0
+    for l in lists:
+        for s in (True, False):
+            for h in (TX, "0xother"):
+                e = ex(transfers=l, succeeded=s, tx_hash=h)
+                checked += 1
+                if verdict(e) == "ok":
+                    oks += 1
+                    assert s and norm_hash(h) == norm_hash(TX)
+                    matching = [x for x in l if norm_id(x["recipient"]) == norm_id(RECIPIENT)
+                                and norm_id(x["token"]) == norm_id(TOKEN)]
+                    assert matching and sum(int(x["amount_raw"]) for x in matching) >= MIN
+    assert checked > 1000 and oks > 0
+
+
+# --- regressions from earlier GenLayer contracts ----------------------------
+
+def test_no_response_format_and_no_value_transfer():
+    code = "\n".join(l for l in SRC.splitlines() if not l.strip().startswith("#"))
+    assert "response_format=" not in code
+    assert "emit_transfer" not in SRC and "get_contract_at(" not in SRC
+
+
+def test_prompt_is_blind_to_the_expectations():
+    # the model must not see what the requester expects
+    body = SRC[SRC.index("def leader_fn"):SRC.index("def validator_fn")]
+    for name in ("expected_recipient", "expected_token", "expected_tx", "min_amount"):
+        assert name not in body, name
+
+
+if __name__ == "__main__":
+    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+    for fn in tests:
+        fn()
+        print("ok", fn.__name__)
+    print(f"{len(tests)} tests passed")
