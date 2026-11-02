@@ -1,0 +1,35 @@
+{
+  "_note": "Synthetic test document modeled on an explorer API response. Not a real transaction.",
+  "hash": "0xd8de8bdfe2421ff20156a02da3f1b0b3859a0f34c46c7bd571aa9487808dc8bf",
+  "status": "ok",
+  "result": "success",
+  "block_number": 21000105,
+  "from": {
+    "hash": "0x2222222222222222222222222222222222222222"
+  },
+  "to": {
+    "hash": "0x1111111111111111111111111111111111111111"
+  },
+  "value": "0",
+  "token_transfers": [
+    {
+      "from": {
+        "hash": "0x1111111111111111111111111111111111111111"
+      },
+      "to": {
+        "hash": "0x5B38Da6a701c568545dCfcB03FcB875f56beddC4"
+      },
+      "token": {
+        "address_hash": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "symbol": "USDC",
+        "name": "USD Coin",
+        "decimals": "6",
+        "type": "ERC-20"
+      },
+      "total": {
+        "decimals": "6",
+        "value": "250000000"
+      }
+    }
+  ]
+}
