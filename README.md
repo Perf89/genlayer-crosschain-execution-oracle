@@ -1,6 +1,6 @@
 # Cross-chain Execution Confirmation Oracle
 
-A standalone GenLayer Intelligent Contract primitive submitted for the **Standalone Contracts** track.
+A standalone GenLayer Intelligent Contract primitive for the **Standalone Contracts** track.
 
 ## Purpose
 
@@ -22,7 +22,7 @@ Real-world use cases:
   merchant or employee in the agreed token.
 - **Bridge monitoring**: a neutral second opinion on "stuck" transfers.
 
-## Why this is a real primitive, not a demo
+## Design properties
 
 - **The model extracts, the code decides.** Validators are asked only to read
   the evidence and list facts: the transaction hash the response describes,
@@ -109,10 +109,12 @@ offline tests that load the helper functions straight from the contract
 source, so they test exactly the deployed code:
 
 ```
-python3 tests/test_extraction_logic.py
+python3 tests/test_extraction_logic
 ```
 
-### Limits, stated plainly
+The offline suite passed **17 tests** on commit `538a083a5fe23843b04f2d3c5f0e6828030e5d57`.
+
+### Scope and limits
 
 The oracle trusts what the explorer reports. A lagging, wrong or manipulated
 explorer is the main risk, which is why the requester gets one chance to point
@@ -123,14 +125,12 @@ expect, and the oracle confirms what the destination chain shows.
 
 ## Deployed contract
 
-The source in this repository is byte-for-byte the source that was deployed.
-
 | Field | Value |
 |---|---|
 | Network | GenLayer Studio (Studionet) |
-| Deployed address | `<FULL ADDRESS>` |
-| Explorer | https://explorer-studio.genlayer.com/address/`<FULL ADDRESS>` |
-| Tx (deploy) | `<TX HASH>` |
+| Deployed address | `0xCDFD404e132F86Bde3bfd26F0a5d7b5e28771554` |
+| Explorer | [Contract in Explorer](https://explorer-studio.genlayer.com/address/0xCDFD404e132F86Bde3bfd26F0a5d7b5e28771554) |
+| Tx (deploy) | [Finalized deployment](https://explorer-studio.genlayer.com/tx/0x98e3aa11cbf3c3cf9d9a8bfc858964326e9bb7700f20d260a10d3ba0596527bb) |
 | Source | [`crosschain_execution_oracle.py`](./crosschain_execution_oracle.py) |
 
 ## Test inputs
@@ -149,7 +149,7 @@ every input of every run can be read and replayed by anyone:
 | Reverted | `0x355f4ed2fc9d646595756b8cc0aa7715ce065d5d3b91fb402588509b2e995d96` | status error, nothing credited |
 | Retry that succeeded | `0xd8de8bdfe2421ff20156a02da3f1b0b3859a0f34c46c7bd571aa9487808dc8bf` | a second delivery, correct |
 
-Each is served at `https://raw.githubusercontent.com/Perf89/genlayer-crosschain-execution-oracle/main/fixtures/<transaction hash>.json`.
+Each is served at `https://raw.githubusercontent.com/Perf89/Cross-chain-Execution-Confirmation-Oracle/main/fixtures/<transaction hash>.json`.
 
 Expectations used in all requests:
 
@@ -160,57 +160,17 @@ Expectations used in all requests:
 | `expected_token` | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
 | `min_amount_raw` | `250000000` |
 
-## Live test evidence
+## Studionet results
 
-### Scenario 1: delivered correctly is confirmed
+These calls used synthetic Ethereum explorer fixtures. The status and reason are contract fields returned by `get_request`.
 
-| Field | Value |
-|---|---|
-| Request | `<ID>` (`0x8b8a872815...`) |
-| Result | `<RESULT>` |
-| Tx (`create_request`) | `<TX HASH>` |
-| Tx (`check`) | `<TX HASH>` |
-
-### Scenario 2: a lookalike token is not the real token
-
-| Field | Value |
-|---|---|
-| Request | `<ID>` (`0x379f894438...`) |
-| Result | `<RESULT>` |
-| Tx (`create_request`) | `<TX HASH>` |
-| Tx (`check`) | `<TX HASH>` |
-
-### Scenario 3: an instruction hidden in a token name does not work
-
-| Field | Value |
-|---|---|
-| Request | `<ID>` (`0x89c930cae5...`) |
-| Result | `<RESULT>` |
-| Tx (`create_request`) | `<TX HASH>` |
-| Tx (`check`) | `<TX HASH>` |
-
-### Scenario 4: reverted, then the retry is accepted as new evidence
-
-| Field | Value |
-|---|---|
-| Request | `<ID>` (`0x355f4ed2fc...`, then `0xd8de8bdfe2...`) |
-| First result | `<RESULT>` |
-| Final result | `<RESULT>` |
-| Tx (`create_request`) | `<TX HASH>` |
-| Tx (`check`, first) | `<TX HASH>` |
-| Tx (`update_evidence`) | `<TX HASH>` |
-| Tx (`check`, final) | `<TX HASH>` |
-| A second `update_evidence` | rejected, `<TX HASH>` |
-
-### Scenario 5: evidence must belong to the claimed transaction
-
-`create_request` is called with the delivered transaction's hash but the
-evidence URL of a different transaction. The contract rejects it before any
-AI is involved.
-
-| Field | Value |
-|---|---|
-| Result | rejected, `<TX HASH>` |
+| Request | Scenario | Observed result | Explorer transactions |
+|---|---|---|---|
+| 0 | Successful transfer | `confirmed / ok` | [Create](https://explorer-studio.genlayer.com/tx/0x643e33ebeeeaafe262e163882ece6178f29c2503c1e64c37b69682d52995e230), [check](https://explorer-studio.genlayer.com/tx/0x1b219d4718eaab7e3158b2e41a0a669f260683c345756165866a799b611ddd88) |
+| 1 | Lookalike token | `unconfirmed / wrong_token` | [Create](https://explorer-studio.genlayer.com/tx/0xbfe9da92c869b9f1aba3da689eff3f2c3e05d2ab9931c1da174dbd1fdfcf258d), [check](https://explorer-studio.genlayer.com/tx/0x02c714b428eeb7a7f4816c6c3f5b5cc20c27aff36ab2b2cd32562add9fbef41a) |
+| 2 | Different recipient, with an embedded instruction in the token name | `unconfirmed / wrong_recipient` | [Create](https://explorer-studio.genlayer.com/tx/0x98bd85349d24d1588d9b4cc9b58bac818a3b8ed0b102745ca130d1b80320aebf), [check](https://explorer-studio.genlayer.com/tx/0xab5473f95878ac8b939dd9bd7945d3b452732f09798ecfff34a17ad63b581d9f) |
+| 3 | Reverted execution followed by an evidence update | `unconfirmed / tx_failed` → `pending` | [Create](https://explorer-studio.genlayer.com/tx/0x2d4f31c2e503f132100a47b156b447984f874f326f5acb8323286d2ca10782dd), [check](https://explorer-studio.genlayer.com/tx/0xf7becaf1b14ec80c85ab152759c7311a19c7fb4d132ce471b1d8683a42b06c8b), [update](https://explorer-studio.genlayer.com/tx/0x74010c631c2606f6a7a03aa2c1d675882bd4ae8ebdd42d4a74ce09fd9e10ff3d) |
+| — | Lookalike transaction hash with the successful-transfer fixture URL | Rejected with `evidence_url must contain the transaction hash` | [Rejected create](https://explorer-studio.genlayer.com/tx/0x5ef764455b6b1ac4bfd0b6cf12efa6939f2e31430ec70c727d6e96c9b4ddea25) |
 
 ## Reproducing
 
@@ -227,6 +187,6 @@ AI is involved.
 ## Files
 
 - [`crosschain_execution_oracle.py`](./crosschain_execution_oracle.py): contract source
-- [`tests/test_extraction_logic.py`](./tests/test_extraction_logic.py): offline logic tests
+- [`tests/test_extraction_logic`](./tests/test_extraction_logic): offline logic tests
 - [`fixtures/`](./fixtures): the evidence used as test inputs
 - [`LICENSE`](./LICENSE): MIT
